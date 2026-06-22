@@ -1,29 +1,92 @@
 #include "kernel.h"
 
-void kernel_main(void) 
+uint32_t terminal_row;
+uint32_t terminal_column;
+uint8_t  terminal_color;
+uint16_t* terminal_buffer;
+
+void terminal_initialize(void) 
 {
-    /* Point our pointer directly to the video memory buffer */
-    uint16_t* const vga_buffer = (uint16_t*) VGA_ADDRESS;
+    terminal_row = 0;
+    terminal_column = 0;
 
-    /* Build a background character: space ' ' with Light Grey on Black background */
-    uint8_t default_color = VGA_COLOR_LIGHT_GREY | (VGA_COLOR_BLACK << 4);
-    uint16_t clear_entry = ' ' | (default_color << 8);
-
-    /* Loop through all 2000 cells (80 * 25) to clear the monitor screen cleanly */
+    terminal_color = VGA_COLOR_LIGHT_GREEN | (VGA_COLOR_BLACK << 4);
+    terminal_buffer = (uint16_t*) VGA_ADDRESS;
+    
+    uint16_t clear_char = ' ' | (terminal_color << 8);
     for (int i = 0; i < VGA_WIDTH * VGA_HEIGHT; i++) {
-        vga_buffer[i] = clear_entry;
+        terminal_buffer[i] = clear_char;
+    }
+}
+
+void terminal_scroll(void)
+{
+    uint16_t clear_char = ' ' | (terminal_color << 8);
+
+    for (int y = 0; y < VGA_HEIGHT - 1; y++) {
+        for (int x = 0; x < VGA_WIDTH; x++) {
+            terminal_buffer[y * VGA_WIDTH + x] = terminal_buffer[(y + 1) * VGA_WIDTH + x];
+        }
     }
 
-    /* Build our high-contrast "42" display attributes */
-    /* Light Green text on Black background */
-    uint8_t green_color = VGA_COLOR_LIGHT_GREEN | (VGA_COLOR_BLACK << 4);
-    
-    /* Write '4' and '2' directly to the first two slots of screen memory */
-    vga_buffer[0] = '4' | (green_color << 8);
-    vga_buffer[1] = '2' | (green_color << 8);
+    for (int x = 0; x < VGA_WIDTH; x++) {
+        terminal_buffer[(VGA_HEIGHT - 1) * VGA_WIDTH + x] = clear_char;
+    }
+}
 
-    /* Safely anchor the CPU so it does not stray into bad instructions */
+void terminal_putchar(char c) 
+{
+    if (c == '\n') {
+        terminal_column = 0;
+        if (++terminal_row == VGA_HEIGHT) {
+            terminal_scroll();
+            terminal_row = VGA_HEIGHT - 1;
+        }
+        return;
+    }
+
+    const int index = terminal_row * VGA_WIDTH + terminal_column;
+    terminal_buffer[index] = c | (terminal_color << 8);
+
+    if (++terminal_column == VGA_WIDTH) {
+        terminal_column = 0;
+        if (++terminal_row == VGA_HEIGHT) {
+            terminal_scroll();
+            terminal_row = VGA_HEIGHT - 1;
+        }
+    }
+}
+
+void terminal_write(const char* data, uint32_t size) 
+{
+    for (uint32_t i = 0; i < size; i++) {
+        terminal_putchar(data[i]);
+    }
+}
+
+void terminal_writestring(const char* data) 
+{
+    uint32_t len = 0;
+    while (data[len] != '\0') {
+        len++;
+    }
+    terminal_write(data, len);
+}
+
+/* --- KERNEL ENTRY POINT --- */
+void kernel_main(void) 
+{
+    terminal_initialize();
+
+    terminal_writestring("Welcome to KFS-1 from scratch!\n");
+    terminal_writestring("System initialized successfully...\n");
+    terminal_writestring("-----------------------------------\n");
+    terminal_writestring("Booting core context...\n");
+    terminal_writestring("Done.\n\n");
+    
+    terminal_writestring("42\n");
+
     while (1) {
-        // Safe idle loop
+        // Halt state safely
     }
 }
