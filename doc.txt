@@ -1,0 +1,99 @@
+Documentation for KFS-1
+
+-fno-builtin
+What it does? It disables built-in compiler function optimizations.
+Why we need it? Throwing an exception in a language requires a complex unwinding library behind the scenes that tracks memory addresses, call stacks, and dynamic allocations.
+                Since your kernel doesn't have an operating system runtime to handle stack unwinding, throwing an exception would cause an unrecoverable crash.
+
+-fno-stack-protector
+What it does? Disables automatically injected stack canary checks.
+Why we need it? Modern compilers insert secret security numbers (called "canaries") onto the stack before function calls and check them before returning to prevent buffer overflow attacks. 
+                If a canary fails, the compiler attempts to call a protective function named __stack_chk_fail.
+                Since that function lives in the host C library (which we don't have), trying to compile without this flag will lead to unresolved reference errors during linking.
+
+-fno-rtti
+What it does? Disables Run-Time Type Information (specific to C++).
+Why we need it? In C++, RTTI allows features like dynamic_cast and typeid to inspect an object's type at runtime.
+                To do this, the compiler generates extra data tables inside the binary and relies on runtime type-checking code.
+                Disabling it saves space, speeds up execution, and prevents compiler calls to non-existent runtime libraries.
+
+-nostdlib
+What it does? Tells the linker not to use the standard C/C++ system libraries when linking the final binary.
+Why we need it? Normally, your program links against libc or libstdc++ to get functions like printf, malloc, exit, and fopen.
+                Those functions interact directly with the Linux kernel via system calls.
+                Your kernel is the operating system, so linking against host libraries makes no sense and will prevent your kernel from booting.
+
+-nodefaultlibs
+What it does? Prevents the compiler from using the default system libraries during the linking phase.
+Why we need it? This flag is closely paired with -nostdlib.
+                Even if you don't explicitly link a library, compilers automatically append flags to include default system libraries (like standard system startup files crt0.o).
+                -nodefaultlibs turns off all standard default libraries completely.
+
+
+1. Core Architectural Concepts
+Target Architecture (i386 / 32-bit x86)
+What it is? A 32-bit instruction set architecture in cpu defined by Intel.
+Why it matters? Modern 64-bit CPUs (x86_64 or ARM64) start up in legacy modes or use complex 64-bit page tables and calling conventions.
+                Setting -m32 targets pure 32-bit protected mode, which gives you direct access to 4 GB of memory without needing complex 64-bit long-mode setup code right out of the gate.
+
+Bare-Metal Environment
+What it is? Running code directly on physical hardware CPU/RAM without an underlying operating system.
+Why it matters? You have no libc, no system calls, no crash recovery, and no standard functions like printf or malloc.
+                If your code makes a mistake (like accessing a bad memory address), the CPU cannot rely on an OS to print a nice error—it will simply restart or freeze.
+
+
+2. Boot Flow and Execution Pipeline
+[ Power On ] ──> [ GRUB Bootloader ] ──> [ Multiboot Header ] ──> [ Assembly boot.s ] ──> [ C kernel_main ]
+
+Step 1: GRUB Bootloader & Multiboot Protocol
+What it is? GRUB is a universal bootloader that loads operating systems into RAM.
+Why it matters? Instead of writing a fragile, complex 512-byte BIOS bootloader from scratch, we adhere to the Multiboot Specification.
+                GRUB does the heavy lifting of initializing hardware into 32-bit protected mode and jumping straight to our code.
+
+Step 2: The Multiboot Header
+What it is? A specific block of magic numbers (0x1BADB002) placed in the binary.
+Why it matters? GRUB scans files on the disk looking for this signature.
+                If found, GRUB recognizes the binary as a valid OS kernel and boots it; if missing, GRUB rejects it.
+
+Step 3: Assembly Bootstrap (boot.s)
+What it is? A tiny assembly script that executes before any C code runs.
+Why it matters? High-level C code requires a Stack (a designated region of memory used to store local variables and function return addresses).
+                Because no OS exists to assign a stack, boot.s manually reserves 16 KB of raw RAM (.skip 16384), assigns it to the stack pointer register (%esp), and only then executes call kernel_main.
+
+Step 4: Custom Linker Script (linker.ld)
+What it is? A blueprint telling the linker (ld) how to assemble the final binary layout in physical memory.
+Why it matters? Default linkers structure programs to run inside an OS environment (like Linux).
+                Our custom script explicitly enforces . = 1M;, ensuring our kernel binary is loaded at physical address 1 Megabyte (0x100000).
+                This avoids hitting memory below 1MB, which is occupied by legacy BIOS data and hardware buffers.
+
+How kernel_main is called? 
+The assembler (as or gcc) doesn't know where kernel_main lives in memory. If you didn't do anything else, it would crash.
+However, because assembly doesn't automatically look into other files, the assembler marks kernel_main as an Unresolved Symbol (a placeholder or blank address) in boot.o. 
+It writes a note inside boot.o saying: "Hey, whoever links this binary later, please fill in the real memory address of kernel_main here."
+
+When gcc compiles kernel.c into kernel.o, it creates a Symbol Table inside kernel.o. 
+This table acts like an index card saying: "This file contains a function named kernel_main starting at offset X."
+
+The Linker (ld) takes all .o files and reads their Symbol Tables:
+    It looks at boot.o and sees a blank request: "Where is kernel_main?"
+    It looks at kernel.o and sees the answer: "I have kernel_main!"
+    Based on your linker.ld script (which says the kernel starts at 1MB), the linker calculates the exact final memory address where kernel_main will end up in RAM (e.g., 0x00100120).
+    It replaces the placeholder call kernel_main instruction inside the binary with the exact physical address instruction: call 0x00100120.
+
+To summerize :
+When boot.s runs, it executes a hardcoded memory address jump that was calculated and patched directly into the binary by the Linker during compilation.
+The assembly file doesn't need to know file names—it only needs the Symbol Name to match between C and Assembly.
+
+
+3. Screen Display Mechanics (VGA Text Mode)
+VGA Memory Buffer (0xB8000)
+What it is? A physical memory address mapped directly to the graphics display adapter.
+Why it matters? Writing data to 0xB8000 bypasses drivers and sends character signals directly to the screen hardware.
+
+Screen Layout & Bit Formatting
+Dimensions: Fixed at 80 columns by 25 rows (2,000 character cells). And it always be this size for the VGA text mode.
+Data Encoding: Every cell on the screen uses 16 bits (2 bytes):
+    Lower Byte (bits 0–7): ASCII Character code (e.g., '4').
+    Upper Byte (bits 8–15): Color attributes (Background color shifted left by 4 bits, combined with Foreground color).
+Indexing Math: Because RAM is a single flat array, coordinates are mapped using:
+    Index = (Row * 80) + Column

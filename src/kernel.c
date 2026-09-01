@@ -14,9 +14,10 @@ void terminal_initialize(void)
     terminal_buffer = (uint16_t*) VGA_ADDRESS;
     
     uint16_t clear_char = ' ' | (terminal_color << 8);
-    for (int i = 0; i < VGA_WIDTH * VGA_HEIGHT; i++) {
-        terminal_buffer[i] = clear_char;
-    }
+    // for (int i = 0; i < VGA_WIDTH * VGA_HEIGHT; i++) {
+    //     terminal_buffer[i] = clear_char;
+    // }
+    memset(terminal_buffer, 0, VGA_WIDTH * VGA_HEIGHT * sizeof(uint16_t));
 }
 
 void terminal_scroll(void)
@@ -66,10 +67,7 @@ void terminal_write(const char* data, uint32_t size)
 
 void terminal_writestring(const char* data) 
 {
-    uint32_t len = 0;
-    while (data[len] != '\0') {
-        len++;
-    }
+    uint32_t len = strlen(data);
     terminal_write(data, len);
 }
 

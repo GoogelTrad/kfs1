@@ -11,7 +11,7 @@ SRC_DIR = src
 OBJ_DIR = obj
 ISO_DIR = iso_root
 
-OBJS = $(OBJ_DIR)/kernel.o $(OBJ_DIR)/boot.o
+OBJS = $(OBJ_DIR)/kernel.o $(OBJ_DIR)/boot.o $(OBJ_DIR)/helpers.o
 
 all: $(NAME)
 

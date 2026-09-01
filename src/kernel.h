@@ -40,4 +40,9 @@ void terminal_putchar(char c);
 void terminal_write(const char* data, uint32_t size);
 void terminal_writestring(const char* data);
 
+
+//helpers
+uint32_t strlen(const char* str);
+void *memset(void *bufptr, int value, uint32_t num);
+
 #endif
