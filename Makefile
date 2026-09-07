@@ -13,7 +13,12 @@ ISO_DIR = iso_root
 
 OBJS = $(OBJ_DIR)/kernel.o $(OBJ_DIR)/boot.o $(OBJ_DIR)/helpers.o
 
-all: $(NAME)
+all: prep $(NAME)
+	docker run --rm -it -v $(pwd):/kfs kfs-builder make clean
+	docker run --rm -it -v $(pwd):/kfs kfs-builder make iso
+
+prep:
+	docker build --no-cache -t kfs-builder .
 
 $(NAME): $(OBJ_DIR) $(OBJS)
 	$(CC) $(LDFLAGS) -o $(NAME) $(OBJS)

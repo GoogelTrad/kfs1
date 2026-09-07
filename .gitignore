@@ -5,9 +5,9 @@
 */.map
 */.dSYM
 */.vscode
-.iso
-.o
-.bin
-.elf
-.map
-.dSYM
+*.iso
+*.o
+*.bin
+*.elf
+*.map
+*.dSYM
