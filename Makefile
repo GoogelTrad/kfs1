@@ -4,7 +4,7 @@ ISO_NAME = mykernel.iso
 CC = gcc
 AS = gcc
 LDFLAGS = -m32 -T linker.ld -nostdlib -nodefaultlibs
-CFLAGS = -m32 -ffreestanding -O2 -Wall -Wextra -std=gnu99 -fno-builtin -fno-exceptions -fno-stack-protector #-fno-rtti 
+CFLAGS = -m32 -ffreestanding -O2 -Wall -Wextra -std=gnu99 -fno-builtin -fno-exceptions -fno-stack-protector -fno-rtti 
 ASFLAGS = -m32 -c
 
 SRC_DIR = src
