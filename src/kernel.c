@@ -12,11 +12,7 @@ void terminal_initialize(void)
 
     terminal_color = VGA_COLOR_LIGHT_GREEN | (VGA_COLOR_BLACK << 4);
     terminal_buffer = (uint16_t*) VGA_ADDRESS;
-    
-    // uint16_t clear_char = ' ' | (terminal_color << 8);
-    // for (int i = 0; i < VGA_WIDTH * VGA_HEIGHT; i++) {
-    //     terminal_buffer[i] = clear_char;
-    // }
+
     memset(terminal_buffer, 0, VGA_WIDTH * VGA_HEIGHT * sizeof(uint16_t));
 }
 
