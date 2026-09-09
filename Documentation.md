@@ -7,26 +7,61 @@ screen display mechanics used to build the KFS-1 kernel.
 
 ## 1. Compiler & Linker Flags
 
+The entries below follow the order the flags appear in the `Makefile`
+(`CFLAGS` first, then `LDFLAGS`).
+
 ### `-fno-builtin`
 
-- **What it does?** Disables built-in compiler function optimizations.
-- **Why we need it?** Throwing an exception in a language requires a complex
-  unwinding library behind the scenes that tracks memory addresses, call stacks,
-  and dynamic allocations. Since your kernel doesn't have an operating system
-  runtime to handle stack unwinding, throwing an exception would cause an
-  unrecoverable crash.
+- **What it does?** Stops the compiler from recognizing standard library
+  functions (`memset`, `memcpy`, `strlen`, `printf`, ...) as "built-ins" that it
+  can inline, constant-fold, or silently replace with a call to another library
+  function.
+- **Why we need it?** By default the compiler knows the semantics of these
+  functions and feels free to rewrite your code: a loop that zeroes an array can
+  be turned into a call to `memset`, and `printf("hi\n")` can be downgraded to
+  `puts`. In a freestanding kernel those target functions live in a C library we
+  don't link, so the substitution produces unresolved-reference errors at link
+  time (or infinite recursion when your own `memset` gets "optimized" into a call
+  to itself). `-fno-builtin` forces the compiler to emit exactly the calls you
+  wrote and use your implementations from `helpers.c`.
+
+### `-fno-exceptions`
+
+- **What it does?** Disables C++ exception handling (`throw` / `try` / `catch`)
+  and lets the compiler assume no exception can ever propagate, so it emits no
+  stack-unwinding tables (`.eh_frame`) or landing-pad code. For the C files in
+  this project it is close to a no-op, but it is kept as a guard so the moment
+  any C++ (or `-fexceptions` C) is added, exceptions stay off.
+- **Why we need it?** If exceptions were enabled, `throw` would rely on a runtime
+  unwinding library that walks the call stack frame by frame
+  (`__cxa_throw`, `_Unwind_Resume`, `_Unwind_RaiseException`, provided by
+  `libgcc` / `libstdc++`). That library is not linked in a freestanding kernel,
+  so an enabled-but-unlinked exception path produces unresolved-reference errors,
+  and an actual `throw` at runtime with no unwinder would be an unrecoverable
+  crash. Turning the feature off also makes generated code smaller and removes
+  the hidden control-flow paths on every call that might throw.
 
 ### `-fno-stack-protector`
 
-- **What it does?** Disables automatically injected stack canary checks.
-- **Why we need it?** Modern compilers insert secret security numbers (called
-  "canaries") onto the stack before function calls and check them before
-  returning to prevent buffer overflow attacks. If a canary fails, the compiler
-  attempts to call a protective function named `__stack_chk_fail`. Since that
-  function lives in the host C library (which we don't have), trying to compile
-  without this flag will lead to unresolved reference errors during linking.
+- **What it does?** Disables the automatically injected stack-canary checks.
+  Many host GCC builds default to `-fstack-protector-strong`, so this flag is an
+  explicit opt-out rather than a change from a neutral default.
+- **Why we need it?** With the protector on, the compiler adds code to the
+  *prologue* of at-risk functions that copies a secret value from the global
+  `__stack_chk_guard` onto the stack just past the return address, and code to
+  the *epilogue* that re-checks it; on mismatch it calls `__stack_chk_fail`.
+  Both `__stack_chk_guard` and `__stack_chk_fail` are supplied by the host C
+  library, which we do not link, so leaving the protector on gives
+  unresolved-reference errors at link time. (You could instead provide your own
+  `__stack_chk_guard` / `__stack_chk_fail`, but for KFS-1 it is simpler to turn
+  the feature off.)
 
 ### `-fno-rtti`
+
+> Currently commented out in the `Makefile` (`#-fno-rtti`). It is a C++-only
+> option: passing it while compiling C makes GCC emit the warning
+> *"command-line option '-fno-rtti' is valid for C++/ObjC++ but not for C"*.
+> Keep it commented until (and unless) the project starts compiling C++.
 
 - **What it does?** Disables Run-Time Type Information (specific to C++).
 - **Why we need it?** In C++, RTTI allows features like `dynamic_cast` and
@@ -37,23 +72,65 @@ screen display mechanics used to build the KFS-1 kernel.
 
 ### `-nostdlib`
 
-- **What it does?** Tells the linker not to use the standard C/C++ system
-  libraries when linking the final binary.
-- **Why we need it?** Normally, your program links against `libc` or `libstdc++`
-  to get functions like `printf`, `malloc`, `exit`, and `fopen`. Those functions
-  interact directly with the Linux kernel via system calls. Your kernel is the
-  operating system, so linking against host libraries makes no sense and will
-  prevent your kernel from booting.
+- **What it does?** A `gcc` driver option for the link step: do not use the
+  standard system startup files *and* do not use the standard system libraries.
+  It is the union of two finer flags — `-nostartfiles` (drop `crt0.o` /
+  `crti.o` / `crtbegin.o` and friends) and `-nodefaultlibs` (drop `libc`,
+  `libgcc`, `libm`, `libstdc++`, ...). Only the objects and libraries you name
+  explicitly are linked.
+- **Why we need it?** Normally the driver injects C-library startup code that
+  runs before `main` (sets up `argc`/`argv`, `atexit`, the C runtime) and links
+  `libc` for `printf`, `malloc`, `exit`, and so on. All of that reaches the OS
+  through Linux system calls. Your kernel *is* the operating system, so it must
+  start at its own `_start` (from `boot.s`, selected by `linker.ld`) with no libc
+  behind it; linking the host startup files or libraries would drag in
+  system-call stubs and prevent the kernel from booting.
 
 ### `-nodefaultlibs`
 
-- **What it does?** Prevents the compiler from using the default system libraries
-  during the linking phase.
-- **Why we need it?** This flag is closely paired with `-nostdlib`. Even if you
-  don't explicitly link a library, compilers automatically append flags to
-  include default system libraries (like standard system startup files
-  `crt0.o`). `-nodefaultlibs` turns off all standard default libraries
-  completely.
+- **What it does?** Disables only the *default libraries* at link time (`libc`,
+  `libgcc`, `libm`, `libstdc++`, ...), while still linking the standard startup
+  files. It does **not** control `crt0.o` / `crti.o` — that is `-nostartfiles`.
+- **Why we need it?** Even with no explicit `-l` flags, the driver appends the
+  default libraries automatically; a single call to `memcpy` or a 64-bit
+  division the compiler lowers to a `__udivdi3` helper would then pull code out
+  of `libc` / `libgcc`. `-nodefaultlibs` blocks that.
+- **Note:** Since `LDFLAGS` already passes `-nostdlib`, which *includes*
+  `-nodefaultlibs`, listing `-nodefaultlibs` as well is redundant (harmless —
+  it just makes the intent explicit).
+
+### `-T linker.ld`
+
+- **What it does?** Replaces the linker's built-in default linker script with
+  `linker.ld` from this repo.
+- **Why we need it?** The default script lays a binary out for a hosted Linux
+  process (high load address, dynamic interpreter, libc startup). Our script
+  sets the entry point to `_start`, places the image at `. = 1M`, and forces the
+  Multiboot header to the front of `.text` so GRUB accepts the kernel. See
+  section 3, *Step 4*, for the details.
+
+### Standard flags (`-m32`, `-O2`, `-Wall`, `-Wextra`, `-std=gnu99`)
+
+These are not kernel-specific, but for completeness:
+
+- **`-m32`** — generate 32-bit x86 code and objects. Must be identical for every
+  compile, assemble, and link step, or the objects will not link. See section 2,
+  *Target Architecture*.
+- **`-O2`** — optimisation level 2. Mostly a normal speed/size choice, with two
+  bare-metal caveats: optimisation is what makes the compiler turn loops into
+  `memset`/`memcpy` calls (hence `-fno-builtin`), and it can legally reorder or
+  drop reads/writes made through a plain pointer to memory-mapped hardware. The
+  VGA buffer pointer (`terminal_buffer`) is currently a plain `uint16_t*`; if
+  future optimisation ever elides screen writes, the fix is to type it
+  `volatile uint16_t*`.
+- **`-Wall -Wextra`** — enable the common and extra warning sets. In a kernel a
+  warning like "uninitialised variable" or "implicit declaration" often means a
+  bug that would triple-fault the CPU with no diagnostics, so these are treated
+  as mandatory.
+- **`-std=gnu99`** — compile to C99 plus GNU extensions. C99 brings
+  `//` comments, mixed declarations and statements, designated initialisers, and
+  `long long`; the `gnu` variant additionally allows GCC extensions commonly used
+  in kernels (statement expressions, `__attribute__`, inline-asm conveniences).
 
 ---
 
